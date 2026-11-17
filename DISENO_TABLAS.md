@@ -272,7 +272,7 @@ El front (`benqui-go-demo`) tiene una capa de datos intercambiable: cada servici
 
 ## 13. Catálogo de precios de referencia (implementado)
 
-Es un catálogo **de consulta**, separado de `products`, que son los productos propios del negocio. Lo llena una vez por día la sincronización con SEPA / Precios Claros (`scripts/sync-catalog.ts`, GitHub Actions). Sirve para dos cosas: sugerir nombre, rubro y precio al dar de alta un producto escaneado, y mostrar precios de mercado en el demo.
+Es un catálogo **de consulta**, separado de `products`, que son los productos propios del negocio. Lo llena una vez por día la sincronización con SEPA / Precios Claros (`scripts/sync-catalog.ts`, tarea programada en una PC en Argentina). Sirve para dos cosas: sugerir nombre, rubro y precio al dar de alta un producto escaneado, y mostrar precios de mercado en el demo.
 
 | Tabla | Para qué |
 |---|---|

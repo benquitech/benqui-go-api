@@ -7,8 +7,9 @@
  *   npm run sync:catalog -- --offline       # como --dry-run pero sin base (usa los rubros y marcas por defecto)
  *   SEPA_ZIP_PATH=/ruta/sepa.zip npm run sync:catalog   # reusa un ZIP ya descargado
  *
- * Corre en GitHub Actions una vez por dia (.github/workflows/sync-catalog.yml), NO en Vercel:
- * el ZIP pesa ~330 MB y trae ~15 millones de filas. A diferencia de chef-cost-api no envia
+ * Corre una vez por dia como tarea programada de Windows en una PC en Argentina
+ * (scripts/register-sync-task.ps1). No corre en Vercel (el ZIP pesa ~330 MB y trae ~15 millones de
+ * filas) ni en GitHub Actions (el sitio de SEPA les responde 403). A diferencia de chef-cost-api no envia
  * notificaciones: solo actualiza la base (productos, precios, historial y seleccion del demo).
  *
  * Que entra al catalogo: productos con codigo de barras real (EAN valido) cuya descripcion cae en

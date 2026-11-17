@@ -26,9 +26,12 @@ El diseño completo del punto de venta (ventas, caja, stock, fiado) está en [DI
   - **Front y demo:** `FRONTEND_URL` (la URL del demo), `DEMO_ACCESS_KEY`.
   - **Swagger:** `SWAGGER_USER`, `SWAGGER_PASSWORD`.
   - `NODE_ENV=production`.
-- **GitHub Actions (sincronización)**: [.github/workflows/sync-catalog.yml](.github/workflows/sync-catalog.yml) corre todos los días a las 12:17 (hora de Argentina). Hay que crear el secret `DIRECT_URL` en el repo (Settings → Secrets and variables → Actions). También se puede lanzar a mano desde la pestaña Actions, con la opción de solo simular.
+- **Sincronización (tarea programada de Windows)**: corre todos los días a las 10:30 en una PC en Argentina, con el `.env` local (usa `DIRECT_URL`).
+  - Crearla o cambiar la hora: `powershell -ExecutionPolicy Bypass -File scripts\register-sync-task.ps1 -At 10:30`. Crea la tarea "BenquiGo - Sync catalogo SEPA", que ejecuta [scripts/sync-catalog-task.ps1](scripts/sync-catalog-task.ps1).
+  - Logs: `logs/sync-AAAA-MM-DD.log` (se guardan 30 días). Cada corrida también queda en `GET /api/catalog/sync-runs`.
+  - Si la PC está apagada a esa hora, corre al prenderla. Solo corre con la sesión de Windows iniciada.
 
-La sincronización **no corre en Vercel** porque procesa un ZIP de ~330 MB con ~15 millones de filas, igual que en chef-cost-api.
+La sincronización **no corre en Vercel** porque procesa un ZIP de ~330 MB con ~15 millones de filas. Tampoco corre en **GitHub Actions**: el sitio de SEPA (datos.produccion.gob.ar) responde 403 a los servidores de GitHub.
 
 ## Catálogo de precios de referencia
 

@@ -39,6 +39,11 @@ export function sepaDownloadUrl(dayName: string): string {
   return `https://datos.produccion.gob.ar/dataset/${DATASET_ID}/resource/${day.resourceId}/download/${day.file}`;
 }
 
+const DOWNLOAD_HEADERS = {
+  'User-Agent': 'benqui-go-catalog-sync/1.0',
+  Accept: 'application/zip,application/octet-stream,*/*;q=0.8',
+};
+
 /** ZIP del dia: SEPA_ZIP_PATH si esta definido (para reusar uno ya descargado), o se descarga en workDir. */
 export async function getSepaZip(workDir: string, dayName: string): Promise<string> {
   const local = process.env.SEPA_ZIP_PATH;
@@ -53,15 +58,20 @@ export async function getSepaZip(workDir: string, dayName: string): Promise<stri
   let lastError: unknown;
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
-      const res = await fetch(url);
-      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+      // Si el sitio rechaza el pedido (403), el error incluye el servidor y el comienzo de la respuesta.
+      const res = await fetch(url, { headers: DOWNLOAD_HEADERS, redirect: 'follow' });
+      if (!res.ok || !res.body) {
+        const server = res.headers.get('server') ?? '?';
+        const body = (await res.text().catch(() => '')).replace(/\s+/g, ' ').slice(0, 300);
+        throw new Error(`HTTP ${res.status} (server: ${server}) ${body}`);
+      }
       await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(dest));
       console.log(`[sepa] ZIP de ${(fs.statSync(dest).size / 1e6).toFixed(0)} MB`);
       return dest;
     } catch (err) {
       lastError = err;
       console.warn(`[sepa] Intento ${attempt} fallido: ${(err as Error).message}`);
-      await new Promise((r) => setTimeout(r, attempt * 15000));
+      if (attempt < 3) await new Promise((r) => setTimeout(r, attempt * 30000));
     }
   }
   throw new Error(`No se pudo descargar ${url}: ${(lastError as Error)?.message}`);

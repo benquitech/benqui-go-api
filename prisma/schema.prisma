@@ -1,0 +1,252 @@
+// Modelo de datos - Benqui Go API
+// PostgreSQL + Prisma (mismas convenciones que fireextracking-api)
+//
+// Campos de auditoria en las tablas que edita un usuario:
+//   created_by / updated_by / deleted_by : UUID del usuario que realizo la accion
+//   is_deleted (default false)           : soft delete
+//   deleted_at                           : fecha/hora del borrado logico
+//   created_at / updated_at              : timestamps automaticos
+//
+// Esta version cubre seguridad + catalogo de precios de referencia (SEPA).
+// El resto del punto de venta (ventas, caja, stock, fiado) esta en DISENO_TABLAS.md.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── Seguridad ───────────────────────────────────────────────────────────────
+
+/// Roles del sistema: Administrador y Cajero. "Demo" NO es un rol de la base: es un token
+/// temporal que emite POST /demo/session (ver DemoModule).
+model Role {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique @db.VarChar(80)
+  description String?   @db.VarChar(255)
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  deletedBy   String?   @map("deleted_by") @db.Uuid
+  isDeleted   Boolean   @default(false) @map("is_deleted")
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+/// Permisos por modulo.
+model Permission {
+  id          String    @id @default(uuid()) @db.Uuid
+  name        String    @unique @db.VarChar(80)
+  description String?   @db.VarChar(255)
+  order       Int?
+  createdBy   String?   @map("created_by") @db.Uuid
+  updatedBy   String?   @map("updated_by") @db.Uuid
+  deletedBy   String?   @map("deleted_by") @db.Uuid
+  isDeleted   Boolean   @default(false) @map("is_deleted")
+  deletedAt   DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  roles RolePermission[]
+
+  @@map("permissions")
+}
+
+/// Asignacion de permisos a roles.
+model RolePermission {
+  id           String    @id @default(uuid()) @db.Uuid
+  roleId       String    @map("role_id") @db.Uuid
+  permissionId String    @map("permission_id") @db.Uuid
+  createdBy    String?   @map("created_by") @db.Uuid
+  updatedBy    String?   @map("updated_by") @db.Uuid
+  deletedBy    String?   @map("deleted_by") @db.Uuid
+  isDeleted    Boolean   @default(false) @map("is_deleted")
+  deletedAt    DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt    DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id                  String    @id @default(uuid()) @db.Uuid
+  userName            String    @unique @map("user_name") @db.VarChar(80)
+  password            String    @db.VarChar(255)
+  refreshToken        String?   @map("refresh_token") @db.VarChar(255)
+  /// Intentos de login fallidos seguidos; al llegar al maximo se bloquea la cuenta un rato.
+  failedLoginAttempts Int       @default(0) @map("failed_login_attempts")
+  lockedUntil         DateTime? @map("locked_until") @db.Timestamptz
+  firstName           String    @map("first_name") @db.VarChar(120)
+  lastName            String    @map("last_name") @db.VarChar(120)
+  roleId              String    @map("role_id") @db.Uuid
+  createdBy           String?   @map("created_by") @db.Uuid
+  updatedBy           String?   @map("updated_by") @db.Uuid
+  deletedBy           String?   @map("deleted_by") @db.Uuid
+  isDeleted           Boolean   @default(false) @map("is_deleted")
+  deletedAt           DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt           DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  role Role @relation(fields: [roleId], references: [id], onDelete: Restrict)
+
+  @@map("users")
+}
+
+// ─── Catalogo de precios de referencia ───────────────────────────────────────
+// Lo llena scripts/sync-catalog.ts (GitHub Actions, una vez por dia) con los precios
+// que informan los supermercados a SEPA / Precios Claros. Es un catalogo de CONSULTA:
+// no son los productos del negocio (esos van en `products`, ver DISENO_TABLAS.md).
+
+/// SEPA = lo crea y actualiza la sincronizacion. MANUAL = lo cargo el administrador (productos que
+/// SEPA no informa, como cigarrillos): la sincronizacion nunca lo modifica.
+enum CatalogSource {
+  SEPA
+  MANUAL
+}
+
+enum SyncStatus {
+  RUNNING
+  SUCCESS
+  FAILED
+}
+
+/// Rubros del catalogo (los mismos del demo: Bebidas, Golosinas, ...). La sincronizacion
+/// clasifica cada producto por las palabras clave de su descripcion.
+model CatalogCategory {
+  id              String    @id @default(uuid()) @db.Uuid
+  /// Identificador estable para el front: "bebidas" (el demo usa "cat-bebidas").
+  slug            String    @unique @db.VarChar(40)
+  name            String    @db.VarChar(80)
+  color           String    @db.VarChar(7)
+  icon            String?   @db.VarChar(16)
+  order           Int?
+  /// Palabras clave (sin acentos, minusculas) que ubican un producto en este rubro: "gaseosa", "agua mineral".
+  /// Gana la que aparece mas al principio de la descripcion ("galletitas de chocolate" -> galletitas).
+  keywords        String[]  @default([])
+  /// Si la descripcion contiene alguna, el producto no entra en este rubro ("agua oxigenada").
+  excludeKeywords String[]  @default([]) @map("exclude_keywords")
+  isActive        Boolean   @default(true) @map("is_active")
+  createdBy       String?   @map("created_by") @db.Uuid
+  updatedBy       String?   @map("updated_by") @db.Uuid
+  deletedBy       String?   @map("deleted_by") @db.Uuid
+  isDeleted       Boolean   @default(false) @map("is_deleted")
+  deletedAt       DateTime? @map("deleted_at") @db.Timestamptz
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz
+
+  products CatalogProduct[]
+
+  @@map("catalog_categories")
+}
+
+/// Marcas tal como las informa SEPA. `isFeatured` = empresa conocida: solo esas entran al demo.
+model CatalogBrand {
+  id         String   @id @default(uuid()) @db.Uuid
+  /// Nombre normalizado (sin acentos ni signos): "coca cola". Unico.
+  key        String   @unique @db.VarChar(120)
+  name       String   @db.VarChar(120)
+  isFeatured Boolean  @default(false) @map("is_featured")
+  createdBy  String?  @map("created_by") @db.Uuid
+  updatedBy  String?  @map("updated_by") @db.Uuid
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  products CatalogProduct[]
+
+  @@map("catalog_brands")
+}
+
+/// Producto del catalogo de referencia, identificado por su codigo de barras (EAN).
+model CatalogProduct {
+  id               String        @id @default(uuid()) @db.Uuid
+  barcode          String        @unique @db.VarChar(14)
+  source           CatalogSource @default(SEPA)
+  name             String        @db.VarChar(200)
+  /// Nombre + marca + codigo sin acentos ni mayusculas, para buscar ("cafe" encuentra "Café").
+  searchText       String        @default("") @map("search_text") @db.VarChar(400)
+  brandId          String?       @map("brand_id") @db.Uuid
+  categoryId       String?       @map("category_id") @db.Uuid
+  /// true = el administrador eligio el rubro a mano y la sincronizacion no lo cambia.
+  categoryLocked   Boolean       @default(false) @map("category_locked")
+  /// Presentacion: 500 (ml), 118 (g), 6 (unidades).
+  presentationQty  Decimal?      @map("presentation_qty") @db.Decimal(12, 3)
+  /// "g", "ml" o "unit".
+  presentationUnit String?       @map("presentation_unit") @db.VarChar(8)
+  /// Precio de referencia nacional: mediana de los precios de lista informados (sin valores atipicos).
+  referencePrice   Decimal       @map("reference_price") @db.Decimal(12, 2)
+  minPrice         Decimal       @map("min_price") @db.Decimal(12, 2)
+  maxPrice         Decimal       @map("max_price") @db.Decimal(12, 2)
+  /// Mediana por provincia: { "AR-A": "1500.00", "AR-C": "1620.00" }.
+  provincePrices   Json          @default("{}") @map("province_prices")
+  /// Sucursales que informaron el producto en la ultima sincronizacion (mide que tan masivo es).
+  storeCount       Int           @default(0) @map("store_count")
+  priceUpdatedAt   DateTime      @map("price_updated_at") @db.Timestamptz
+  /// Ultima sincronizacion en la que aparecio en SEPA.
+  lastSeenAt       DateTime      @map("last_seen_at") @db.Timestamptz
+  /// Demo: true = el administrador lo fija entre los productos visibles de su rubro.
+  isPinned         Boolean       @default(false) @map("is_pinned")
+  /// true = no se muestra en ninguna consulta (producto mal informado, duplicado...).
+  isHidden         Boolean       @default(false) @map("is_hidden")
+  /// Lo calcula la sincronizacion (o POST /catalog/demo/rebuild): los N productos por rubro que ve el demo.
+  inDemo           Boolean       @default(false) @map("in_demo")
+  demoRank         Int?          @map("demo_rank")
+  createdBy        String?       @map("created_by") @db.Uuid
+  updatedBy        String?       @map("updated_by") @db.Uuid
+  createdAt        DateTime      @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt        DateTime      @updatedAt @map("updated_at") @db.Timestamptz
+
+  brand    CatalogBrand?         @relation(fields: [brandId], references: [id], onDelete: SetNull)
+  category CatalogCategory?      @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  history  CatalogPriceHistory[]
+
+  @@index([categoryId, inDemo])
+  @@index([brandId])
+  @@index([name])
+  @@map("catalog_products")
+}
+
+/// Historial del precio de referencia nacional: una fila cada vez que cambia (no una por dia).
+model CatalogPriceHistory {
+  id            String   @id @default(uuid()) @db.Uuid
+  productId     String   @map("product_id") @db.Uuid
+  previousPrice Decimal  @map("previous_price") @db.Decimal(12, 2)
+  price         Decimal  @db.Decimal(12, 2)
+  syncRunId     String?  @map("sync_run_id") @db.Uuid
+  createdAt     DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  product CatalogProduct @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
+  @@map("catalog_price_history")
+}
+
+/// Registro de cada sincronizacion con SEPA (para ver desde la API si la ultima anduvo).
+model CatalogSyncRun {
+  id              String     @id @default(uuid()) @db.Uuid
+  source          String     @db.VarChar(120)
+  status          SyncStatus @default(RUNNING)
+  startedAt       DateTime   @default(now()) @map("started_at") @db.Timestamptz
+  finishedAt      DateTime?  @map("finished_at") @db.Timestamptz
+  rowsRead        Int        @default(0) @map("rows_read")
+  productsSeen    Int        @default(0) @map("products_seen")
+  productsCreated Int        @default(0) @map("products_created")
+  productsUpdated Int        @default(0) @map("products_updated")
+  pricesChanged   Int        @default(0) @map("prices_changed")
+  error           String?
+
+  @@index([startedAt])
+  @@map("catalog_sync_runs")
+}
